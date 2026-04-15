@@ -6,11 +6,12 @@ Run: python ascii_video_gui.py
 """
 
 import tkinter as tk
-from tkinter import filedialog, ttk
+from tkinter import filedialog, ttk, font as tkfont
 import threading
 import queue
 import os
 import sys
+import platform
 
 import ascii_video
 
@@ -23,11 +24,49 @@ PINK_DIM = "#C01070"     # dimmer pink (hover/border)
 TEXT = "#F0F0F0"         # primary text
 TEXT_DIM = "#888888"     # secondary text
 
-FONT_FAMILY = "Segoe UI"
-FONT_NORMAL = (FONT_FAMILY, 10)
-FONT_BOLD = (FONT_FAMILY, 10, "bold")
-FONT_HEADER = (FONT_FAMILY, 18, "bold")
-FONT_MONO = ("Consolas", 9)
+
+def _pick_font(candidates, default):
+    """Return the first available font family from candidates, or default."""
+    try:
+        available = set(tkfont.families())
+        for name in candidates:
+            if name in available:
+                return name
+    except Exception:
+        pass
+    return default
+
+
+def _init_fonts():
+    """Choose cross-platform fonts (Tk must be initialized first)."""
+    system = platform.system()
+    if system == "Windows":
+        ui_candidates = ["Segoe UI", "Tahoma", "Arial"]
+        mono_candidates = ["Consolas", "Courier New"]
+    elif system == "Darwin":
+        ui_candidates = ["SF Pro Text", "Helvetica Neue", "Helvetica"]
+        mono_candidates = ["Menlo", "Monaco", "Courier"]
+    else:  # Linux
+        ui_candidates = ["Inter", "Cantarell", "Noto Sans", "DejaVu Sans",
+                         "Liberation Sans"]
+        mono_candidates = ["JetBrains Mono", "Fira Code", "Source Code Pro",
+                           "DejaVu Sans Mono", "Liberation Mono", "Monospace"]
+
+    ui = _pick_font(ui_candidates, "TkDefaultFont")
+    mono = _pick_font(mono_candidates, "TkFixedFont")
+    return ui, mono
+
+
+# Defaults — replaced after Tk init
+FONT_UI = "TkDefaultFont"
+FONT_MONO_FAMILY = "TkFixedFont"
+
+
+def _font(weight="normal", size=10, mono=False):
+    family = FONT_MONO_FAMILY if mono else FONT_UI
+    if weight == "bold":
+        return (family, size, "bold")
+    return (family, size)
 
 
 class AsciiGUI:
@@ -52,13 +91,13 @@ class AsciiGUI:
         # Header
         header = tk.Label(
             self.root, text="ASCII VIDEO FILTER",
-            bg=BG, fg=PINK, font=FONT_HEADER
+            bg=BG, fg=PINK, font=_font("bold", 18)
         )
         header.pack(pady=(20, 4))
 
         subheader = tk.Label(
             self.root, text="GPU-accelerated video to ASCII art converter",
-            bg=BG, fg=TEXT_DIM, font=FONT_NORMAL
+            bg=BG, fg=TEXT_DIM, font=_font()
         )
         subheader.pack(pady=(0, 16))
 
@@ -80,7 +119,7 @@ class AsciiGUI:
         self.file_listbox = tk.Listbox(
             list_wrap, bg=BG_INPUT, fg=TEXT,
             selectbackground=PINK, selectforeground="#000000",
-            font=FONT_MONO, height=5, borderwidth=0, highlightthickness=0,
+            font=_font(mono=True), height=5, borderwidth=0, highlightthickness=0,
             activestyle="none"
         )
         self.file_listbox.pack(side="left", fill="x", expand=True)
@@ -110,12 +149,12 @@ class AsciiGUI:
 
         # Font size slider
         tk.Label(settings_inner, text="Font Size:", bg=BG_ALT, fg=TEXT,
-                 font=FONT_NORMAL).grid(row=0, column=0, sticky="w", pady=4)
+                 font=_font()).grid(row=0, column=0, sticky="w", pady=4)
 
         self.fontsize_var = tk.IntVar(value=12)
         self.fontsize_label = tk.Label(settings_inner, text="12 px",
                                         bg=BG_ALT, fg=PINK,
-                                        font=FONT_BOLD, width=6, anchor="e")
+                                        font=_font("bold"), width=6, anchor="e")
         self.fontsize_label.grid(row=0, column=2, sticky="e", padx=(8, 0))
 
         slider = tk.Scale(
@@ -130,7 +169,7 @@ class AsciiGUI:
 
         # Color mode
         tk.Label(settings_inner, text="Color Mode:", bg=BG_ALT, fg=TEXT,
-                 font=FONT_NORMAL).grid(row=1, column=0, sticky="w", pady=(12, 4))
+                 font=_font()).grid(row=1, column=0, sticky="w", pady=(12, 4))
 
         self.color_var = tk.StringVar(value="green")
         mode_frame = tk.Frame(settings_inner, bg=BG_ALT)
@@ -141,13 +180,13 @@ class AsciiGUI:
                 mode_frame, text=mode.capitalize(), variable=self.color_var,
                 value=mode, bg=BG_ALT, fg=TEXT, selectcolor=BG_INPUT,
                 activebackground=BG_ALT, activeforeground=PINK,
-                font=FONT_NORMAL, borderwidth=0, highlightthickness=0
+                font=_font(), borderwidth=0, highlightthickness=0
             )
             rb.pack(side="left", padx=(0, 14))
 
         # Output directory
         tk.Label(settings_inner, text="Output Dir:", bg=BG_ALT, fg=TEXT,
-                 font=FONT_NORMAL).grid(row=2, column=0, sticky="w", pady=(12, 4))
+                 font=_font()).grid(row=2, column=0, sticky="w", pady=(12, 4))
 
         out_frame = tk.Frame(settings_inner, bg=BG_ALT)
         out_frame.grid(row=2, column=1, columnspan=2, sticky="ew", padx=12, pady=(12, 4))
@@ -155,7 +194,7 @@ class AsciiGUI:
         self.output_var = tk.StringVar(value="(same folder as source)")
         self.output_entry = tk.Entry(
             out_frame, textvariable=self.output_var,
-            bg=BG_INPUT, fg=TEXT_DIM, font=FONT_MONO,
+            bg=BG_INPUT, fg=TEXT_DIM, font=_font(mono=True),
             borderwidth=0, highlightthickness=1,
             highlightbackground=BG_INPUT, highlightcolor=PINK,
             insertbackground=PINK
@@ -192,7 +231,7 @@ class AsciiGUI:
         self.status_var = tk.StringVar(value="Ready.")
         status_label = tk.Label(
             progress_frame, textvariable=self.status_var,
-            bg=BG, fg=TEXT_DIM, font=FONT_MONO, anchor="w"
+            bg=BG, fg=TEXT_DIM, font=_font(mono=True), anchor="w"
         )
         status_label.pack(fill="x", pady=(0, 4))
 
@@ -209,7 +248,7 @@ class AsciiGUI:
     def _section_label(self, parent, text):
         lbl = tk.Label(
             parent, text=text, bg=BG, fg=PINK,
-            font=(FONT_FAMILY, 9, "bold")
+            font=_font("bold", 9)
         )
         lbl.pack(anchor="w", pady=(4, 0))
 
@@ -225,7 +264,7 @@ class AsciiGUI:
 
         btn = tk.Button(
             parent, text=text, command=command,
-            bg=bg_c, fg=fg, font=FONT_BOLD,
+            bg=bg_c, fg=fg, font=_font("bold"),
             activebackground=hover_bg, activeforeground=fg,
             borderwidth=0, highlightthickness=1,
             highlightbackground=PINK_DIM,
@@ -420,13 +459,22 @@ class AsciiGUI:
 def main():
     root = tk.Tk()
 
-    # Set app icon if possible (skipped if no icon file)
-    icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.ico")
-    if os.path.exists(icon_path):
-        try:
-            root.iconbitmap(icon_path)
-        except Exception:
-            pass
+    # Initialize fonts (must happen after Tk root is created)
+    global FONT_UI, FONT_MONO_FAMILY
+    FONT_UI, FONT_MONO_FAMILY = _init_fonts()
+
+    # Set app icon if available — .png on Linux, .ico on Windows
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    png_icon = os.path.join(base_dir, "icon.png")
+    ico_icon = os.path.join(base_dir, "icon.ico")
+    try:
+        if os.path.exists(png_icon):
+            img = tk.PhotoImage(file=png_icon)
+            root.iconphoto(True, img)
+        elif os.path.exists(ico_icon) and platform.system() == "Windows":
+            root.iconbitmap(ico_icon)
+    except Exception:
+        pass
 
     app = AsciiGUI(root)
     root.mainloop()

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=ASCII Video Filter
+Comment=GPU-accelerated video to ASCII art converter
+Exec=bash -c "cd %k/.. && python3 ascii_video_gui.py"
+Icon=video-x-generic
+Terminal=false
+Categories=AudioVideo;Video;
+Keywords=ascii;video;converter;art;

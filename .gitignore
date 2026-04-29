@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.venv/
+venv/
+env/
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Project-specific
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+*_ascii.mp4
+*.temp.mp4
+
+# Allow demo files in a dedicated folder
+!demo/*.mp4
+!demo/*.mov
+
+# Logs
+*.log

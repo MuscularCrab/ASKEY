@@ -241,7 +241,7 @@ class AsciiRenderer:
 
 def render_file(input_path, output_path, font_size, color_mode,
                 out_w=1920, out_h=1080, progress_callback=None,
-                cancel_flag=None):
+                cancel_flag=None, stage_callback=None):
     """Render a single video file.
 
     Args:
@@ -252,16 +252,28 @@ def render_file(input_path, output_path, font_size, color_mode,
         out_w, out_h: output resolution
         progress_callback: optional fn(current, total, fps) for progress updates
         cancel_flag: optional threading.Event() - set to cancel mid-render
+        stage_callback: optional fn(stage_name) - called when entering each stage
 
     Returns:
-        True on success, False on failure/cancellation
+        True on success, False on cancellation. Raises on errors.
     """
+    def _stage(name):
+        if stage_callback:
+            try:
+                stage_callback(name)
+            except Exception:
+                pass
+
+    _stage("Opening video")
     temp_output = output_path + ".temp.mp4"
     rotation = get_rotation(input_path)
 
     cap = cv2.VideoCapture(input_path)
     if not cap.isOpened():
-        return False
+        raise RuntimeError(
+            f"Could not open video: {input_path}\n"
+            f"The file may be corrupted, missing, or use an unsupported codec."
+        )
 
     fps = cap.get(cv2.CAP_PROP_FPS)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -269,12 +281,16 @@ def render_file(input_path, output_path, font_size, color_mode,
     ret, first_frame = cap.read()
     if not ret:
         cap.release()
-        return False
+        raise RuntimeError(
+            f"Could not read first frame: {input_path}\n"
+            f"The file may be empty or corrupted."
+        )
     if rotation:
         first_frame = rotate_frame(first_frame, rotation)
     src_h, src_w = first_frame.shape[:2]
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
+    _stage("Initializing GPU")
     renderer = AsciiRenderer(src_w, src_h, out_w, out_h, font_size)
 
     # Clean up old output files
@@ -282,14 +298,20 @@ def render_file(input_path, output_path, font_size, color_mode,
         if os.path.exists(f):
             try:
                 os.remove(f)
-            except Exception:
-                pass
+            except Exception as e:
+                raise RuntimeError(
+                    f"Could not remove old output file: {f}\n"
+                    f"It may be open in another program. ({e})"
+                )
 
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(temp_output, fourcc, fps, (out_w, out_h))
     if not writer.isOpened():
         cap.release()
-        return False
+        raise RuntimeError(
+            f"Could not create output video: {temp_output}\n"
+            f"Check directory permissions and that the path is writable."
+        )
 
     # Threaded I/O pipeline
     read_queue = deque()
@@ -325,6 +347,7 @@ def render_file(input_path, output_path, font_size, color_mode,
     reader_t.start()
     writer_t.start()
 
+    _stage("Processing frames")
     frame_num = 0
     start_time = time.time()
     cancelled = False
@@ -377,6 +400,7 @@ def render_file(input_path, output_path, font_size, color_mode,
     # Mux audio
     ffmpeg_path = find_ffmpeg()
     if ffmpeg_path:
+        _stage("Muxing audio")
         try:
             cmd = [ffmpeg_path, "-y",
                    "-i", temp_output, "-i", input_path,

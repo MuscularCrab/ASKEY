@@ -11,6 +11,7 @@ import threading
 import queue
 import os
 import sys
+import time
 import platform
 
 import ascii_video
@@ -74,8 +75,8 @@ class AsciiGUI:
         self.root = root
         self.root.title("ASCII Video Filter")
         self.root.configure(bg=BG)
-        self.root.geometry("720x640")
-        self.root.minsize(600, 560)
+        self.root.geometry("760x820")
+        self.root.minsize(640, 720)
 
         self.files = []
         self.render_thread = None
@@ -225,25 +226,130 @@ class AsciiGUI:
         # hidden until render starts
 
         # --- Progress section ---
-        progress_frame = tk.Frame(main, bg=BG)
-        progress_frame.pack(fill="x", pady=(16, 0))
+        self._section_label(main, "PROGRESS")
 
-        self.status_var = tk.StringVar(value="Ready.")
-        status_label = tk.Label(
-            progress_frame, textvariable=self.status_var,
-            bg=BG, fg=TEXT_DIM, font=_font(mono=True), anchor="w"
+        progress_frame = tk.Frame(main, bg=BG_ALT, highlightbackground=PINK_DIM,
+                                  highlightthickness=1)
+        progress_frame.pack(fill="both", expand=True, pady=(4, 0))
+
+        progress_inner = tk.Frame(progress_frame, bg=BG_ALT)
+        progress_inner.pack(fill="both", expand=True, padx=12, pady=10)
+
+        # Top line: current file / batch position
+        self.current_file_var = tk.StringVar(value="Idle")
+        current_file_label = tk.Label(
+            progress_inner, textvariable=self.current_file_var,
+            bg=BG_ALT, fg=PINK, font=_font("bold"),
+            anchor="w", justify="left"
         )
-        status_label.pack(fill="x", pady=(0, 4))
+        current_file_label.pack(fill="x")
 
-        # Custom progress bar (tkinter's default is hard to style)
-        self.progress_canvas = tk.Canvas(
-            progress_frame, height=6, bg=BG_INPUT,
+        # Stage / status line
+        self.stage_var = tk.StringVar(value="Add files and click RENDER ALL.")
+        stage_label = tk.Label(
+            progress_inner, textvariable=self.stage_var,
+            bg=BG_ALT, fg=TEXT, font=_font(mono=True),
+            anchor="w", justify="left"
+        )
+        stage_label.pack(fill="x", pady=(2, 8))
+
+        # Per-file progress bar
+        self.file_progress_canvas = tk.Canvas(
+            progress_inner, height=6, bg=BG_INPUT,
             highlightthickness=0, borderwidth=0
         )
-        self.progress_canvas.pack(fill="x")
-        self.progress_bar = self.progress_canvas.create_rectangle(
+        self.file_progress_canvas.pack(fill="x", pady=(0, 4))
+        self.file_progress_bar = self.file_progress_canvas.create_rectangle(
             0, 0, 0, 6, fill=PINK, outline=""
         )
+
+        # Per-file stats grid
+        stats_frame = tk.Frame(progress_inner, bg=BG_ALT)
+        stats_frame.pack(fill="x", pady=(2, 8))
+
+        self.frame_count_var = tk.StringVar(value="—")
+        self.fps_var = tk.StringVar(value="—")
+        self.eta_var = tk.StringVar(value="—")
+        self.percent_var = tk.StringVar(value="0%")
+
+        self._stat_widget(stats_frame, "Frame", self.frame_count_var, 0)
+        self._stat_widget(stats_frame, "Speed", self.fps_var, 1)
+        self._stat_widget(stats_frame, "ETA", self.eta_var, 2)
+        self._stat_widget(stats_frame, "Done", self.percent_var, 3)
+
+        # Overall batch progress
+        self.batch_label_var = tk.StringVar(value="Batch: 0 / 0")
+        batch_label = tk.Label(
+            progress_inner, textvariable=self.batch_label_var,
+            bg=BG_ALT, fg=TEXT_DIM, font=_font(mono=True, size=9),
+            anchor="w"
+        )
+        batch_label.pack(fill="x", pady=(8, 2))
+
+        self.batch_progress_canvas = tk.Canvas(
+            progress_inner, height=4, bg=BG_INPUT,
+            highlightthickness=0, borderwidth=0
+        )
+        self.batch_progress_canvas.pack(fill="x")
+        self.batch_progress_bar = self.batch_progress_canvas.create_rectangle(
+            0, 0, 0, 4, fill=PINK_DIM, outline=""
+        )
+
+        # Log area for messages and errors
+        log_frame = tk.Frame(progress_inner, bg=BG_ALT)
+        log_frame.pack(fill="both", expand=True, pady=(10, 0))
+
+        log_label = tk.Label(
+            log_frame, text="LOG", bg=BG_ALT, fg=PINK_DIM,
+            font=_font("bold", 8), anchor="w"
+        )
+        log_label.pack(fill="x")
+
+        log_inner = tk.Frame(log_frame, bg=BG_INPUT)
+        log_inner.pack(fill="both", expand=True, pady=(2, 0))
+
+        self.log_text = tk.Text(
+            log_inner, bg=BG_INPUT, fg=TEXT,
+            font=_font(mono=True, size=9),
+            borderwidth=0, highlightthickness=0,
+            wrap="word", height=4, state="disabled",
+            padx=8, pady=6
+        )
+        self.log_text.pack(side="left", fill="both", expand=True)
+
+        log_scroll = tk.Scrollbar(
+            log_inner, command=self.log_text.yview,
+            bg=BG_ALT, troughcolor=BG_INPUT,
+            activebackground=PINK, borderwidth=0
+        )
+        log_scroll.pack(side="right", fill="y")
+        self.log_text.config(yscrollcommand=log_scroll.set)
+
+        # Configure log tags for color-coded messages
+        self.log_text.tag_configure("info", foreground=TEXT)
+        self.log_text.tag_configure("success", foreground="#00FF88")
+        self.log_text.tag_configure("error", foreground="#FF5577")
+        self.log_text.tag_configure("warn", foreground="#FFCC44")
+        self.log_text.tag_configure("dim", foreground=TEXT_DIM)
+
+    def _stat_widget(self, parent, label, var, col):
+        cell = tk.Frame(parent, bg=BG_ALT)
+        cell.grid(row=0, column=col, sticky="ew", padx=(0, 12) if col < 3 else 0)
+        parent.grid_columnconfigure(col, weight=1)
+        tk.Label(cell, text=label, bg=BG_ALT, fg=TEXT_DIM,
+                 font=_font(size=8)).pack(anchor="w")
+        tk.Label(cell, textvariable=var, bg=BG_ALT, fg=TEXT,
+                 font=_font("bold", 11)).pack(anchor="w")
+
+    def _log(self, message, level="info"):
+        """Append a line to the log area."""
+        self.log_text.config(state="normal")
+        import datetime
+        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+        self.log_text.insert("end", f"[{timestamp}] ", "dim")
+        self.log_text.insert("end", message + "\n", level)
+        self.log_text.see("end")
+        self.log_text.config(state="disabled")
 
     def _section_label(self, parent, text):
         lbl = tk.Label(
@@ -317,23 +423,26 @@ class AsciiGUI:
 
     def _update_status(self):
         if not self.files:
-            self.status_var.set("Ready. Add some video files to get started.")
+            self.stage_var.set("Add files and click RENDER ALL.")
+            self.batch_label_var.set("Batch: 0 / 0")
         else:
-            self.status_var.set(f"{len(self.files)} file(s) queued.")
+            self.stage_var.set(f"{len(self.files)} file(s) queued. Ready to render.")
+            self.batch_label_var.set(f"Batch: 0 / {len(self.files)}")
 
     # --- Preview ---
 
     def launch_preview(self):
         if not self.files:
-            self.status_var.set("Add at least one file first.")
+            self._log("Add at least one file first.", "warn")
             return
         if not ascii_video.GPU_AVAILABLE:
-            self.status_var.set("ERROR: CuPy not installed. Run: pip install cupy-cuda12x")
+            self._log("CuPy not installed. Run: pip install cupy-cuda12x", "error")
             return
 
         # Preview runs in a thread to avoid blocking the GUI
         def run_preview():
-            self.status_var.set("Opening preview... (see OpenCV window)")
+            self.stage_var.set("Opening preview window...")
+            self._log("Launching preview...", "info")
             try:
                 settings = ascii_video.preview_mode(
                     self.files[0],
@@ -344,14 +453,22 @@ class AsciiGUI:
                     self.fontsize_var.set(settings["fontsize"])
                     self.fontsize_label.config(text=f"{settings['fontsize']} px")
                     self.color_var.set(settings["color_mode"])
-                    self.status_var.set(
+                    self.stage_var.set(
                         f"Preview settings applied: {settings['fontsize']}px, "
                         f"{settings['color_mode']}"
                     )
+                    self._log(
+                        f"Settings applied from preview: {settings['fontsize']}px, "
+                        f"{settings['color_mode']}", "success"
+                    )
                 else:
-                    self.status_var.set("Preview cancelled.")
+                    self.stage_var.set("Preview cancelled.")
+                    self._log("Preview cancelled.", "dim")
             except Exception as e:
-                self.status_var.set(f"Preview error: {e}")
+                import traceback
+                self.stage_var.set(f"Preview error: {e}")
+                self._log(f"Preview error: {e}", "error")
+                self._log(traceback.format_exc(), "error")
 
         threading.Thread(target=run_preview, daemon=True).start()
 
@@ -359,10 +476,10 @@ class AsciiGUI:
 
     def start_render(self):
         if not self.files:
-            self.status_var.set("Add at least one file first.")
+            self._log("Add at least one file first.", "warn")
             return
         if not ascii_video.GPU_AVAILABLE:
-            self.status_var.set("ERROR: CuPy not installed. Run: pip install cupy-cuda12x")
+            self._log("CuPy not installed. Run: pip install cupy-cuda12x", "error")
             return
         if self.render_thread and self.render_thread.is_alive():
             return
@@ -373,6 +490,9 @@ class AsciiGUI:
         self.preview_btn.config(state="disabled")
         self.cancel_flag.clear()
 
+        # Reset progress display
+        self._reset_progress()
+
         font_size = self.fontsize_var.get()
         color_mode = self.color_var.get()
         output_dir = self.output_var.get()
@@ -381,15 +501,30 @@ class AsciiGUI:
 
         files = list(self.files)
 
+        # Initial log entries
+        self._log(f"Starting batch of {len(files)} file(s)", "info")
+        self._log(f"Settings: {font_size}px, {color_mode} mode, "
+                  f"output to {output_dir or 'source folder'}", "dim")
+
         def render_all():
             total = len(files)
             done = 0
+            failed = 0
+            batch_start = time.time()
+
             for i, input_path in enumerate(files, 1):
                 if self.cancel_flag.is_set():
                     break
 
                 if output_dir:
-                    os.makedirs(output_dir, exist_ok=True)
+                    try:
+                        os.makedirs(output_dir, exist_ok=True)
+                    except Exception as e:
+                        self.progress_queue.put(
+                            ("log", (f"Cannot create output dir: {e}", "error"))
+                        )
+                        failed += 1
+                        continue
                     base = os.path.splitext(os.path.basename(input_path))[0]
                     output_path = os.path.join(output_dir, base + "_ascii.mp4")
                 else:
@@ -398,59 +533,183 @@ class AsciiGUI:
 
                 basename = os.path.basename(input_path)
 
-                def on_progress(cur, tot, fps_p, fn=basename, idx=i):
+                # Update batch position
+                self.progress_queue.put(("batch", (i, total)))
+                self.progress_queue.put(
+                    ("current_file", f"[{i}/{total}] {basename}")
+                )
+                self.progress_queue.put(
+                    ("log", (f"Starting: {basename}", "info"))
+                )
+
+                # Verify file exists
+                if not os.path.exists(input_path):
+                    self.progress_queue.put(
+                        ("log", (f"File not found: {input_path}", "error"))
+                    )
+                    failed += 1
+                    continue
+
+                # Check file size
+                try:
+                    size_mb = os.path.getsize(input_path) / (1024 * 1024)
+                    self.progress_queue.put(
+                        ("log", (f"  Source size: {size_mb:.1f} MB", "dim"))
+                    )
+                except Exception:
+                    pass
+
+                def on_progress(cur, tot, fps_p):
                     pct = (cur / tot) * 100 if tot else 0
                     eta = (tot - cur) / fps_p if fps_p > 0 else 0
-                    msg = (f"[{idx}/{total}] {fn} — "
-                           f"{cur}/{tot} ({pct:.1f}%) — "
-                           f"{fps_p:.1f} fps — ETA: {eta:.0f}s")
-                    self.progress_queue.put(("status", msg))
-                    self.progress_queue.put(("progress", pct))
+                    self.progress_queue.put(("frame", (cur, tot)))
+                    self.progress_queue.put(("fps", fps_p))
+                    self.progress_queue.put(("eta", eta))
+                    self.progress_queue.put(("file_progress", pct))
 
+                def on_stage(stage_name):
+                    self.progress_queue.put(("stage", stage_name))
+                    self.progress_queue.put(
+                        ("log", (f"  {stage_name}...", "dim"))
+                    )
+
+                file_start = time.time()
                 try:
                     ok = ascii_video.render_file(
                         input_path, output_path,
                         font_size, color_mode,
                         progress_callback=on_progress,
-                        cancel_flag=self.cancel_flag
+                        cancel_flag=self.cancel_flag,
+                        stage_callback=on_stage
                     )
+                    elapsed = time.time() - file_start
                     if ok:
                         done += 1
+                        self.progress_queue.put(
+                            ("log",
+                             (f"  ✓ Saved: {output_path} ({elapsed:.1f}s)",
+                              "success"))
+                        )
+                    else:
+                        # Cancelled
+                        self.progress_queue.put(
+                            ("log", (f"  Cancelled mid-render", "warn"))
+                        )
                 except Exception as e:
+                    import traceback
+                    failed += 1
                     self.progress_queue.put(
-                        ("status", f"Error on {basename}: {e}")
+                        ("log", (f"  ✗ FAILED: {basename}", "error"))
                     )
+                    # Multi-line error message
+                    for line in str(e).split("\n"):
+                        if line.strip():
+                            self.progress_queue.put(
+                                ("log", (f"    {line}", "error"))
+                            )
+                    # Full traceback for debugging
+                    tb = traceback.format_exc()
+                    self.progress_queue.put(
+                        ("log", (f"    [traceback below]", "dim"))
+                    )
+                    for line in tb.split("\n")[-6:-1]:  # last few lines
+                        if line.strip():
+                            self.progress_queue.put(
+                                ("log", (f"    {line}", "dim"))
+                            )
 
+            # Final summary
+            batch_elapsed = time.time() - batch_start
             if self.cancel_flag.is_set():
-                self.progress_queue.put(("status", f"Cancelled. {done}/{total} completed."))
+                msg = f"Cancelled. Completed {done}/{total}."
+                level = "warn"
+            elif failed > 0:
+                msg = (f"Finished with errors: {done} succeeded, "
+                       f"{failed} failed in {batch_elapsed:.1f}s")
+                level = "error"
             else:
-                self.progress_queue.put(
-                    ("status", f"Done! {done}/{total} files rendered.")
-                )
-            self.progress_queue.put(("progress", 100))
+                msg = (f"All {total} file(s) rendered successfully "
+                       f"in {batch_elapsed:.1f}s")
+                level = "success"
+
+            self.progress_queue.put(("stage", msg))
+            self.progress_queue.put(("log", (msg, level)))
+            self.progress_queue.put(("file_progress", 100))
+            self.progress_queue.put(("batch", (total, total)))
             self.progress_queue.put(("done", None))
 
         self.render_thread = threading.Thread(target=render_all, daemon=True)
         self.render_thread.start()
 
+    def _reset_progress(self):
+        self.current_file_var.set("Starting...")
+        self.stage_var.set("Initializing...")
+        self.frame_count_var.set("—")
+        self.fps_var.set("—")
+        self.eta_var.set("—")
+        self.percent_var.set("0%")
+        self.batch_label_var.set(f"Batch: 0 / {len(self.files)}")
+        self.file_progress_canvas.coords(self.file_progress_bar, 0, 0, 0, 6)
+        self.batch_progress_canvas.coords(self.batch_progress_bar, 0, 0, 0, 4)
+
     def cancel_render(self):
         self.cancel_flag.set()
-        self.status_var.set("Cancelling...")
+        self.stage_var.set("Cancelling — finishing current frame...")
+        self._log("Cancellation requested.", "warn")
 
     def _poll_progress(self):
         try:
             while True:
                 kind, data = self.progress_queue.get_nowait()
-                if kind == "status":
-                    self.status_var.set(data)
-                elif kind == "progress":
-                    w = self.progress_canvas.winfo_width()
+
+                if kind == "current_file":
+                    self.current_file_var.set(data)
+
+                elif kind == "stage":
+                    self.stage_var.set(data)
+
+                elif kind == "frame":
+                    cur, tot = data
+                    self.frame_count_var.set(f"{cur:,} / {tot:,}")
+
+                elif kind == "fps":
+                    self.fps_var.set(f"{data:.1f} fps")
+
+                elif kind == "eta":
+                    eta = data
+                    if eta > 60:
+                        self.eta_var.set(f"{int(eta // 60)}m {int(eta % 60)}s")
+                    else:
+                        self.eta_var.set(f"{eta:.0f}s")
+
+                elif kind == "file_progress":
+                    self.percent_var.set(f"{data:.0f}%")
+                    w = self.file_progress_canvas.winfo_width()
                     fill_w = int(w * (data / 100))
-                    self.progress_canvas.coords(self.progress_bar, 0, 0, fill_w, 6)
+                    self.file_progress_canvas.coords(
+                        self.file_progress_bar, 0, 0, fill_w, 6
+                    )
+
+                elif kind == "batch":
+                    cur_idx, total = data
+                    self.batch_label_var.set(f"Batch: {cur_idx} / {total}")
+                    if total > 0:
+                        w = self.batch_progress_canvas.winfo_width()
+                        fill_w = int(w * (cur_idx / total))
+                        self.batch_progress_canvas.coords(
+                            self.batch_progress_bar, 0, 0, fill_w, 4
+                        )
+
+                elif kind == "log":
+                    msg, level = data
+                    self._log(msg, level)
+
                 elif kind == "done":
                     self.cancel_btn.pack_forget()
                     self.render_btn.pack(side="left", ipadx=18, ipady=4)
                     self.preview_btn.config(state="normal")
+                    self.current_file_var.set("Idle")
+
         except queue.Empty:
             pass
         self.root.after(50, self._poll_progress)
